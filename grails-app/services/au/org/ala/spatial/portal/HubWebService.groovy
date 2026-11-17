@@ -50,40 +50,6 @@ class HubWebService {
         new String(urlResponse(HttpGet.METHOD_NAME, url, null, headers, null, doAuthentication)?.text ?: "")
     }
 
-    /**
-     * Params of queryString needs be combined into url
-     *
-     * @param url
-     * @param nameValuesInFrom
-     * @param headers
-     * @param mFile
-     * @param doAuthentication
-     * @return
-     */
-    Map postUrl(String url, Map nameValuesInFrom = null, Map headers = null, MultipartFile mFile = null,
-                Boolean doAuthentication = null) {
-        def entity = null
-        def nv = nameValuesInFrom
-
-        if (mFile) {
-            PartSource ps = new ByteArrayPartSource(mFile.originalFilename, mFile.getBytes())
-            Part part = new FilePart('files', ps, mFile.getContentType(), 'UTF-8')
-
-            PostMethod postMethod = new PostMethod(url)
-            nameValuesInFrom.each { key, value ->
-                if (value) {
-                    postMethod.setParameter(String.valueOf(key), String.valueOf(value))
-                }
-            }
-
-            entity = new MultipartRequestEntity([part].toArray(new Part[0]), postMethod.params)
-
-            nv = null
-        }
-
-        urlResponse(HttpPost.METHOD_NAME, url, nv, headers, entity, doAuthentication)
-    }
-
     Map getStream(String url, String type, String contentType, InputStream inputStream) {
         HttpClient client = new HttpClient()
         HttpMethodBase call = null
@@ -126,11 +92,6 @@ class HubWebService {
             }
         }
     }
-
-    def excludedHeaders = org.apache.http.HttpHeaders.fields.collect( { it ->
-        it.get(org.apache.http.HttpHeaders).toLowerCase()
-    }) as Set
-
 
     /**
      *
@@ -264,12 +225,12 @@ class HubWebService {
 
             def data
             try {
-                def ct = responseHeaders['Content-Type']
+                def ct = call.getResponseHeader(HttpHeaders.CONTENT_TYPE)?.value
                 if (ct && !ct.toString().startsWith('image') &&
                         (ct.toString().startsWith("text") || ct.toString().startsWith("application/json"))) {
 
                     def is
-                    if (responseHeaders["Content-Encoding"] == "gzip") {
+                    if (call.getResponseHeader(HttpHeaders.CONTENT_ENCODING)?.value == "gzip") {
                         is = new GZIPInputStream(new ByteArrayInputStream(call.getResponseBody()))
                     } else{
                         is  = new ByteArrayInputStream(call.getResponseBody())

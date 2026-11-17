@@ -309,7 +309,10 @@ class PortalController {
                 response.status = r.statusCode
                 render error as JSON
             } else {
-                def shapeFileId = null
+                def shapeFileId
+                if (r?.resp?.id) {
+                    shapeFileId = r.resp.id
+                }
                 def area = r.resp.collect { key, value ->
                     if (key == 'shp_id') {
                         shapeFileId = value
@@ -337,7 +340,6 @@ class PortalController {
             String url = "${grailsApplication.config.layersService.url}/shape/upload/shp/" +
                     "${json.shpId}/featureIndex"
             def r = webService.post(url, json, null, ContentType.APPLICATION_JSON, false, true)
-
             response.status = r.statusCode
             render r.resp as JSON
         }
@@ -363,6 +365,7 @@ class PortalController {
         }
     }
 
+    // This service may timeout if list loading takes a long time, e.g. large lists
     def postSpeciesList() {
         def userId = getValidUserId(params)
 
@@ -373,7 +376,64 @@ class PortalController {
 
             def url = grailsApplication.config.lists.url
 
-            def r = webService.post("${url}/ws/speciesList/", json)
+            def r
+            if (grailsApplication.config.lists.version == 1) {
+                r = webService.post("${url}/ws/speciesList/", json)
+            } else {
+                // create tmp file
+                File tmpFile = File.createTempFile("spatial-species-list-",".csv")
+                BufferedWriter fw = new BufferedWriter(new FileWriter(tmpFile))
+                fw.writeLine("taxonID")
+                for (String item : json.listItems.split(",")) {
+                    fw.writeLine(item)
+                }
+                fw.flush()
+                fw.close()
+
+                r = webService.postMultipart("${url}/v2/upload", null, null, [file: tmpFile], ContentType.APPLICATION_JSON, false, true)
+
+                tmpFile.delete()
+
+                if (r.statusCode == 200) {
+                    def metadata = [
+                            file       : r.resp.localFile,
+                            title      : json.listName,
+                            description: json.description ?: json.listName,
+                            listType   : json.listType,
+                            licence    : json.listLicence,
+                            isPrivate  : json.isPrivate
+                    ]
+
+                    r = webService.post("${url}/v2/ingest", null, metadata, ContentType.APPLICATION_JSON, false, true)
+
+                    // backward compatible id field
+                    r.resp.druid = r.resp.id
+
+                    // wait for /v2/ingest/{id}/progress to complete by polling every 3 seconds,
+                    // but give up after lists.ingestTimeoutMs so a stuck ingest cannot hang this request
+                    long deadline = System.currentTimeMillis() + ((grailsApplication.config.lists.ingestTimeoutMs ?: 120000) as long)
+                    def completed = false
+                    while (!completed) {
+                        if (System.currentTimeMillis() > deadline) {
+                            log.error("timed out waiting for ingest of list ${r.resp.id}")
+                            r = [statusCode: HttpURLConnection.HTTP_GATEWAY_TIMEOUT, resp: [error: "Timed out waiting for list ${r.resp.id} to be ingested"]]
+                            break
+                        }
+                        sleep(3000)
+                        def progressResp = webService.get("${url}/v2/ingest/${r.resp.id}/progress", null, ContentType.APPLICATION_JSON, false, true, [:])
+                        if (progressResp?.statusCode == 200) {
+                            if (progressResp?.resp?.completed) {
+                                completed = true
+                            } else {
+                                // error detection goes here
+                            }
+                        } else {
+                            log.error("failed to get progress for list ${r.resp.id}, status code ${progressResp?.statusCode}, body: ${progressResp?.resp}")
+                            break
+                        }
+                    }
+                }
+            }
 
             if (r == null) {
                 def status = response.setStatus(HttpURLConnection.HTTP_INTERNAL_ERROR)
@@ -382,7 +442,7 @@ class PortalController {
 
             def status = r.statusCode
             if (r.statusCode < 200 || r.statusCode > 300) {
-                r = [error: r.resp  ]
+                r = [error: r.resp]
             }
 
             render status: status, r.resp as JSON
@@ -397,7 +457,9 @@ class PortalController {
         } else {
             def url = grailsApplication.config.lists.url
 
-            def r = webService.get("${url}/ws/speciesListItems/" + params.id, [:], org.apache.http.entity.ContentType.APPLICATION_JSON, false, true, [:])
+            // Temporary workaround for new lists is to set ?max=1000. Keeps it reasonable for biocache-service
+            // and is more reasonable than the new default 10.
+            def r = webService.get("${url}/ws/speciesListItems/" + params.id + "?max=1000", [:], org.apache.http.entity.ContentType.APPLICATION_JSON, false, true, [:])
 
             if (r == null) {
                 def status = response.setStatus(HttpURLConnection.HTTP_INTERNAL_ERROR)
@@ -421,7 +483,16 @@ class PortalController {
         } else {
             def url = grailsApplication.config.lists.url
 
-            def r = webService.get("${url}/ws/speciesList", [user: params.user ? userId : null, max: params.max], org.apache.http.entity.ContentType.APPLICATION_JSON, false, true, [:])
+            int max = (params.max ?: 100) as int
+            int offset = (params.offset ?: 0) as int
+            int page = (offset ? offset.intdiv(max) : 0) + 1
+
+            def r
+            if (grailsApplication.config.lists.version == 1) {
+                r = webService.get("${url}/ws/speciesList", [user: userId, offset: offset, max: max, q: params.q ?: '', sort: params.sort ?: '', order: params.order ?: 'asc'], org.apache.http.entity.ContentType.APPLICATION_JSON, false, true, [:])
+            } else {
+                r = webService.get("${url}/v2/speciesList", [page: page, pageSize: max, q: params.q ?: '', sort: params.sort ?: '', order: params.order ?: 'asc'], org.apache.http.entity.ContentType.APPLICATION_JSON, false, true, [:])
+            }
 
             if (r == null) {
                 def status = response.setStatus(HttpURLConnection.HTTP_INTERNAL_ERROR)
@@ -828,8 +899,18 @@ class PortalController {
             if (!r) {
                 render [:] as JSON
             } else {
-                render r.resp as JSON, status: String.valueOf(r.statusCode)
+                response.status = r.statusCode
+                if (r.statusCode >= 400) {
+                    def resp = [error: "failed to delete"]
+                    render resp as JSON
+                } else {
+                    render r.resp as JSON
+                }
             }
         }
+    }
+
+    def lifeforms() {
+        render portalService.getLifeforms() as JSON
     }
 }

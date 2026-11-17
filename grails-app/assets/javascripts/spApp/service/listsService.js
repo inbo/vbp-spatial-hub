@@ -24,36 +24,26 @@
 
             var scope = {
 
-                list: function (q, max, offset, sort, order, user) {
-                    var params = '';
-                    if (q) params += "/" + encodeURIComponent(q);
-                    //TODO: investigate paging, or keep increasing max
-//                        if(q) params += '&q=' + encodeURIComponent(q);
-//                        if(max) params += '&max=' + max;
-//                        if(offset) params += '&offset=' + offset;
-//                        if(sort) params += '&sort=' + sort;
-//                        if(order) params += '&order=' + order;
-//                        if(user) params += '&user=' + user;
-                    params += "?" + "&max=20000";
-                    if ($SH.userId) {
-                        params += "&user=" + $SH.userId
-                    }
+                list: function (q, max, offset, sort, order) {
+                    var params = '?';
+                    if(q) params += 'q=' + encodeURIComponent(q);
+                    if(max) params += '&max=' + max;
+                    if(offset) params += '&offset=' + offset;
+                    if(sort) params += '&sort=' + sort;
+                    if(order) params += '&order=' + order;
                     return $http.get($SH.baseUrl + "/portal/speciesList" + params, _httpDescription('list')).then(function (response) {
-                        if (response.data.lists) {
-                            return response.data.lists;
-                        } else {
-                            return response.data;
-                        }
+                        return response.data;
                     });
                 },
-                createList: function (name, description, items, makePrivate, listType) {
+                createList: function (name, description, items, makePrivate, listType, listLicence) {
 
                     var list = {
                         "listName": name,
                         "listItems": items,
                         "description": description,
                         "isPrivate": makePrivate,
-                        "listType": listType
+                        "listType": listType,
+                        "listLicence": listLicence
                     };
                     return $http.post($SH.baseUrl + "/portal/postSpeciesList", list, _httpDescription('createList', {withCredentials: true})).then(function (resp) {
                         return resp;
@@ -87,6 +77,12 @@
                 url: function () {
                     return $SH.listsUrl
                 },
+                urlUi: function () {
+                    return $SH.listsUrlUi
+                },
+                version: function () {
+                    return $SH.listsVersion
+                },
                 listToFq: function (data) {
                     var terms = [];
                     for (var i in data) {
@@ -117,12 +113,24 @@
                         if (response.data.isAuthoritative) {
                             // list is indexed
                             return $q.when('species_list_uid:' + listId)
-                        } else {
-                            // list is not indexed, can be very slow (minutes)
+                        } else if (listId.startsWith("dr")) {
+                            // list not indexed, can be very slow (minutes)es)
                             return $q.when('species_list:' + listId)
+                        } else {
+                            // private list, first 200 names only
+                            // getListFq is only called after caching the items
+                            var data = scope.getItemsQCached(listId)
+                            var items = data.filter(item => item.lsid != null).map(item => "lsid:" + item.lsid);
+                            var query = items.join(" OR ");
+                            var limit = 200;
+                            if (items.length > limit ) {
+                                alert("Note: only the first 200 names will be used when when adding species to the map (for user-uploaded and private checklists)");
+                                query = items.slice(0,limit).join(" OR ");
+                            }
+                            return $q.when(query);
                         }
                     }).catch(function () {
-                        // for a user's private lists, can be very slow (minutes)
+                        // fetching list info failed, use this fallback
                         return $q.when('species_list:' + listId);
                     });
                 },

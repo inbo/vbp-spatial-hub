@@ -11,8 +11,6 @@
         .directive('listsList', ['$http', '$timeout', 'ListsService', 'MapService', 'LayoutService',
             function ($http, $timeout, ListsService, MapService, LayoutService) {
 
-                var sortType = 'updated';
-                var sortReverse = false;
                 return {
                     templateUrl: '/spApp/listsList.htm',
                     scope: {
@@ -22,27 +20,63 @@
                         scope.items = [];
 
                         scope.searchLists = '';
+                        scope.pageSize = 20;
+                        scope.page = 1;
+                        scope.total = '';
+                        scope.sortType = 'lastUpdated';
+                        scope.sortReverse = false;
+                        scope.lastSearch = scope.searchLists + scope.sortType + scope.sortReverse;
+                        scope.isLoading = true;
 
                         scope.setItems = function (data) {
+                            let newItems = [];
                             if (data.length) {
                                 for (var i = 0; i < data.length; i++) {
-                                    scope.items.push({
-                                        dataResourceUid: data[i].dataResourceUid,
-                                        listName: data[i].listName,
+                                    newItems.push({
+                                        dataResourceUid: data[i].dataResourceUid || data[i].id,
+                                        listName: data[i].listName || data[i].title,
                                         lastUpdated: data[i].lastUpdated,
-                                        itemCount: data[i].itemCount,
-                                        fullName: data[i].fullName,
-                                        isAuthoritative:data[i].isAuthoritative,
+                                        itemCount: data[i].itemCount || data[i].rowCount,
+                                        fullName: data[i].fullName || data[i].ownerName,
+                                        isAuthoritative: data[i].isAuthoritative || data[i].authoritative,
                                         selected: false
                                     })
                                 }
-                            } else if (data.dataResourceUid) {
-                                scope.items.push({
-                                    dataResourceUid: data.dataResourceUid,
-                                    listName: data.listName,
+                            } else if (data.dataResourceUid || data.id) {
+                                newItems.push({
+                                    dataResourceUid: data.dataResourceUid || data.id,
+                                    listName: data.listName || data.title,
                                     lastUpdated: data.lastUpdated,
-                                    itemCount: data.itemCount,
-                                    fullName: data.fullName,
+                                    itemCount: data.itemCount || data.rowCount,
+                                    fullName: data.fullName || data.ownerName,
+                                    isAuthoritative: data.isAuthoritative || data.authoritative,
+                                    selected: false
+                                });
+                            }
+                            scope.items = newItems;
+                        };
+
+                        scope.appendItems = function (data) {
+                            if (data.length) {
+                                for (var i = 0; i < data.length; i++) {
+                                    scope.items.push({
+                                        dataResourceUid: data[i].dataResourceUid || data[i].id,
+                                        listName: data[i].listName || data[i].title,
+                                        lastUpdated: data[i].lastUpdated,
+                                        itemCount: data[i].itemCount || data[i].rowCount,
+                                        fullName: data[i].fullName || data[i].ownerName,
+                                        isAuthoritative: data[i].isAuthoritative || data[i].authoritative,
+                                        selected: false
+                                    })
+                                }
+                            } else if (data.dataResourceUid || data.id) {
+                                scope.items.push({
+                                    dataResourceUid: data.dataResourceUid || data.id,
+                                    listName: data.listName || data.title,
+                                    lastUpdated: data.lastUpdated,
+                                    itemCount: data.itemCount || data.rowCount,
+                                    fullName: data.fullName || data.ownerName,
+                                    isAuthoritative: data.isAuthoritative || data.authoritative,
                                     selected: false
                                 });
                             }
@@ -52,11 +86,52 @@
                             MapService.add(scope.selection);
                         };
 
-                        ListsService.list().then(function (data) {
-                            scope.setItems(data);
-                        });
+                        scope.fetchLists = function () {
+                            let thisSearch = scope.searchLists + scope.sortType + scope.sortReverse;
+                            if (scope.lastSearch !== thisSearch) {
+                                scope.items = [];
+                                scope.page = 1;
+                                scope.lastSearch = thisSearch;
+                            }
 
-                        scope.$watch('searchLists', function () {
+                            scope.isLoading = true;
+                            ListsService.list(scope.searchLists, scope.pageSize, (scope.page - 1) * scope.pageSize, scope.sortType, scope.sortReverse ? "asc" : "desc").then(function (data) {
+                                scope.total = data.listCount;
+                                scope.setItems(data.lists);
+
+                                // if there was another search running this may already be false
+                                scope.isLoading = false;
+                            });
+                        }
+
+                        scope.fetchMore = function () {
+                            scope.page += 1;
+                            scope.lastSearch = scope.searchLists + scope.sortType + scope.sortReverse;
+                            scope.isLoading = true;
+
+                            ListsService.list(scope.searchLists, scope.pageSize, (scope.page - 1) * scope.pageSize, scope.sortType, scope.sortReverse ? "asc" : "desc").then(function (data) {
+                                scope.appendItems(data.lists);
+
+                                // if there was another search running this may already be false
+                                scope.isLoading = false;
+                            });
+                        }
+
+                        scope.searchAgain = function () {
+                            scope.page = 1;
+                            scope.isLoading = true;
+                            scope.items = [];
+                            scope.fetchLists();
+                        }
+
+                        scope.searchListsTimeout;
+                        scope.$watchGroup(['searchLists', 'sortType', 'sortReverse'], function () {
+                            if (scope.searchListsTimeout) {
+                                $timeout.cancel(scope.searchListsTimeout);
+                            }
+                            scope.searchListsTimeout = $timeout(function () {
+                                scope.fetchLists();
+                            }, 300); // 300ms debounce
                         }, true);
 
                         scope.selection = {};
@@ -70,7 +145,7 @@
                         };
 
                         scope.itemUrl = function (item) {
-                            return ListsService.url() + '/speciesListItem/list/' + item.dataResourceUid
+                            return ListsService.urlUi() + item.dataResourceUid
                         };
 
                         scope.add = function (item) {
@@ -89,12 +164,31 @@
                                         species_list: found.dataResourceUid
                                     })
                                 } else {
-                                    scope._custom()({
-                                        // list not indexed, can be very slow (minutes)
-                                        q: ["species_list:" + found.dataResourceUid],
-                                        name: found.listName,
-                                        species_list: found.dataResourceUid
-                                    })
+                                    if (found.dataResourceUid.startsWith("dr")) {
+                                        // public list
+                                        scope._custom()({
+                                            // list not indexed, can be very slow (minutes)
+                                            q: ["species_list:" + found.dataResourceUid],
+                                            name: found.listName,
+                                            species_list: found.dataResourceUid
+                                        })
+                                    } else {
+                                        // private list, first 200 names only
+                                        ListsService.getItemsQ(found.dataResourceUid).then(function (data) {
+                                            var items = data.split(" OR ");
+                                            var query = data;
+                                            var limit = 200;
+                                            if (items.length > limit ) {
+                                                alert("Note: only the first 200 names will be used when when adding species to the map (for user-uploaded and private checklists)");
+                                                query = items.slice(0,limit).join(" OR ") +")";
+                                            }
+                                            scope._custom()({
+                                                q: [query],
+                                                name: found.listName,
+                                                species_list: found.dataResourceUid
+                                            })
+                                        })
+                                    }
                                 }
 
                             }

@@ -19,7 +19,7 @@ class SpeciesListCacheService {
             try {
                 def threatenedUrl = "${grailsApplication.config.lists.url}${grailsApplication.config.lists.threatenedSpeciesUrl}"
                 def threatened = JSON.parse(hubWebService.getUrl(threatenedUrl, null, false)) as Map
-                def threatenedJoined = threatened.lists*.dataResourceUid.join(' OR ')
+                def threatenedJoined = threatened.lists.collect { it.dataResourceUid ?: it.id }.join(' OR ')
                 if (threatenedJoined) {
                     def threatenedQ = "species_list_uid:(${threatenedJoined})"
                     grailsCacheManager.getCache("threatenedQCache").put("threatenedQ", threatenedQ) // refresh cache
@@ -45,7 +45,7 @@ class SpeciesListCacheService {
             try {
                 def invasiveUrl = "${grailsApplication.config.lists.url}${grailsApplication.config.lists.invasiveSpeciesUrl}"
                 def invasive = JSON.parse(hubWebService.getUrl(invasiveUrl, null, false)) as Map
-                def invasiveJoined = invasive.lists*.dataResourceUid.join(' OR ')
+                def invasiveJoined = invasive.lists.collect { it.dataResourceUid ?: it.id }.join(' OR ')
                 if (invasiveJoined) {
                     def invasiveQ = "species_list_uid:(${invasiveJoined})"
                     grailsCacheManager.getCache("invasiveQCache").put("invasiveQ", invasiveQ) // refresh cache

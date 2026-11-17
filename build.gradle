@@ -1,29 +1,21 @@
 buildscript {
-    repositories {
-        mavenLocal()
-        maven { url "https://repo.grails.org/grails/core" }
-        maven { url "https://nexus.ala.org.au/content/groups/public/" }
-    }
-    dependencies {
-        classpath "org.grails:grails-gradle-plugin:$grailsVersion"
-        classpath "gradle.plugin.com.github.erdi.webdriver-binaries:webdriver-binaries-gradle-plugin:2.7"
-        classpath "com.bertramlabs.plugins:asset-pipeline-gradle:3.4.6"
-//        classpath 'com.bertramlabs.plugins:asset-pipeline-core:3.2.4'
-    }
+    version "3.2.0-SNAPSHOT"
+    group "au.org.ala"
 }
 
-version "2.2.0-SNAPSHOT"
-group "au.org.ala"
-
-apply plugin:"eclipse"
-apply plugin:"idea"
-apply plugin:"war"
-apply plugin:"org.grails.grails-web"
-apply plugin:"com.github.erdi.webdriver-binaries"
-apply plugin:"org.grails.grails-gsp"
-//Angular assert wrapper needs
-apply plugin:"com.bertramlabs.asset-pipeline"
-apply plugin:"maven-publish"
+plugins {
+    id "groovy"
+    id "org.grails.grails-gsp"
+    id "org.grails.grails-web"
+    id "war"
+    id "idea"
+    id "com.bertramlabs.asset-pipeline"
+    id "com.github.erdi.webdriver-binaries" version "3.0"
+    id "eclipse"
+    id "maven-publish"
+    id "application"
+    id "jacoco"
+}
 
 war {
     enabled=true
@@ -95,7 +87,7 @@ dependencies {
     implementation group: 'commons-io', name: 'commons-io', version: '2.6'
     implementation group: 'commons-lang', name: 'commons-lang', version: '2.6'
 
-    implementation group: "com.bertramlabs.plugins", name: "asset-pipeline-gradle", version: "3.4.6"
+    implementation group: "com.bertramlabs.plugins", name: "asset-pipeline-gradle", version: "4.3.0"
 
     //Angular profile wrapper needs
     assets 'com.craigburke.angular:angular-annotate-asset-pipeline:2.4.1'
@@ -109,7 +101,7 @@ dependencies {
     implementation "org.grails.plugins:ala-auth:$alaSecurityLibsVersion"
     implementation "org.grails.plugins:ala-ws-plugin:$alaSecurityLibsVersion"
 
-    implementation "org.grails.plugins:ala-bootstrap3:4.4.0"
+    implementation "org.grails.plugins:ala-bootstrap3:4.5.0"
 
     implementation "au.org.ala.plugins.grails:ala-charts-plugin:2.3.0-ANGULAR-SNAPSHOT"
     runtimeOnly 'org.grails.plugins:sandbox-hub:1.0'
@@ -134,6 +126,9 @@ task _Events {
         new GroovyScriptEngine([project.projectDir.toString()] as String[]).run('_Events.groovy', new Binding())
     }
 }
+
+// -PskipEvents skips npm install, jsdoc and the template i18n processing, e.g. to only run the unit tests
+_Events.onlyIf { !project.hasProperty('skipEvents') }
 
 // the tasks used here for dependsOn may be incomplete/incorrect
 assetCompile.dependsOn(_Events)
@@ -163,8 +158,10 @@ ext {
     drivers = ["firefox", "chrome", "chromeHeadless"]
 }
 
-webdriverBinaries {
-    driverUrlsConfiguration = resources.text.fromFile('geb-repo-arm64.json') // (2)
+// geb-repo-arm64.json only lists ARM64 drivers. On other architectures GebConfig uses the npm chromedriver.
+if (System.getProperty('os.arch') == 'aarch64') {
+    webdriverBinaries {
+        driverUrlsConfiguration = resources.text.fromFile('geb-repo-arm64.json') // (2)
 
         chromedriver {
             version = '101.0.4951.41'
@@ -173,7 +170,7 @@ webdriverBinaries {
         geckodriver {
             version = '0.31.0'
         }
-
+    }
 }
 
 tasks.getByName("integrationTest") {
@@ -198,6 +195,7 @@ tasks.getByName("integrationTest") {
 
 
 tasks.withType(Test) {
+    useJUnitPlatform()
     maxHeapSize = "1g"
     jvmArgs '-XX:MaxMetaspaceSize=512m'
     testLogging {
@@ -207,9 +205,36 @@ tasks.withType(Test) {
 }
 
 
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
 assets {
     minifyJs = true
     minifyCss = true
+}
+
+bootWar {
+    from('src/main/resources/META-INF/context.xml') {
+        into 'META-INF'
+    }
+}
+
+war {
+    from('src/main/resources/META-INF/context.xml') {
+        into 'META-INF'
+    }
+}
+
+bootJar {
+    enabled = true
+    classifier = 'exec'
+    launchScript()
+    dependsOn(compileGroovyPages)
 }
 
 // Refer to FieldCapture: https://github.com/AtlasOfLivingAustralia/fieldcapture/blob/feature/grails4/gradle/publish.gradle
@@ -242,6 +267,7 @@ publishing {
                 }
             }
             artifact bootWar
+            artifact bootJar
         }
     }
 }

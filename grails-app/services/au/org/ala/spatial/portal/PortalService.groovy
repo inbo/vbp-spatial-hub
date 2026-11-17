@@ -19,12 +19,14 @@ import grails.converters.JSON
 import grails.plugin.cache.Cacheable
 import grails.util.Holders
 
+
 /**
  * Helper class for invoking other ALA web services.
  */
 class PortalService {
 
     def grailsApplication
+    def hubWebService
 
     static final DEFAULT_USER_ID = -1
 
@@ -119,5 +121,23 @@ class PortalService {
         } else {
             [:] + grailsApplication.config
         }
+    }
+
+    List lifeforms = new ArrayList<String>() // unlikely to change, cache forever
+    def getLifeforms() {
+        if (lifeforms.isEmpty()) {
+            def url = "${grailsApplication.config.biocacheService.url}/occurrence/facets?facets=species_group&flimit=-1"
+            try {
+                def json = hubWebService.getUrl(url, null, false)
+                if (json) {
+                    def data = JSON.parse(json)
+                    lifeforms = new ArrayList(data.fieldResult[0])
+                }
+            } catch (err) {
+                log.error("failed to get lifeforms: " + url, err)
+            }
+        }
+
+        return lifeforms
     }
 }
